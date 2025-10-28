@@ -43,7 +43,7 @@ This defines the service's load and latency targets.
     - **Stateless Services (RPC Proxy):**
         - Horizontal Pod Autoscaler (HPA) based on CPU (target 70%), memory (target 80%), and custom metrics (request queue depth)
         - Min replicas: 3 (maintain N+2 redundancy)
-        - Max replicas: 100 (sufficient for 500k RPS burst at ~5k RPS per pod)
+        - Max replicas: 100 (sufficient for 500k RPS spike at ~5k RPS per pod)
         - Scale-up: Add pods when metrics exceed target for 30s
         - Scale-down: Remove pods after 5 minutes below target (prevent flapping)
     - **Stateful Services (Archive Nodes):**
@@ -136,7 +136,7 @@ This section defines the security requirements for the service, following a Zero
 5.1. Network Security:
 
 - Ingress: All external traffic over HTTPS (TLS). DDoS protection and global rate limiting must be enabled.
-- Internal: A service mesh (e.g., Istio, Linkerd) must be used to enforce mTLS (mutual TLS) for all pod-to-pod communication.
+- Internal: A service mesh Istio must be used to enforce mTLS (mutual TLS) for all pod-to-pod communication.
 - Policies: Strict NetworkPolicies must be in place to restrict communication to only what is necessary (default-deny).
 
 5.2. Authentication & Authorization:
@@ -231,11 +231,13 @@ This `StorageClass` leverages OpenEBS ZFS LocalPV CSI driver on dedicated high-I
     - Worker nodes must be labeled: `node-type=arbitrum-archive-io` and `openebs.io/zfs-node=true`
     - OpenEBS ZFS CSI driver must be installed in the cluster
 - **Key Configuration:**
-    - `volumeBindingMode: WaitForFirstConsumer` - **CRITICAL**. Delays PVC binding until pod is scheduled. Ensures pod and storage co-locate on the same physical node for maximum I/O performance. Without this, scheduler might place pod on one node while storage is created on another, breaking local storage.
+    - `volumeBindingMode: WaitForFirstConsumer` -  Delays PVC binding until pod is scheduled. Ensures pod and storage co-locate on the same physical node for maximum I/O performance. Without this, scheduler might place pod on one node while storage is created on another, breaking local storage.
     - `poolname: "nvme-pool"` - Name of ZFS pool created on each worker node. Must match actual pool name on nodes.
-    - `reclaimPolicy: Retain` - **CRITICAL**. Prevents accidental data loss if PVC is deleted. With 10TB+ archive data that takes weeks to sync, volumes must survive PVC deletion.
+    - `reclaimPolicy: Retain` - Prevents accidental data loss if PVC is deleted. With 10TB+ archive data that takes weeks to sync, volumes must survive PVC deletion.
     - `allowedTopologies` - Constrains volume creation to only nodes with ZFS pools across 3 availability zones.
     - ZFS parameters (`compression: lz4`, `recordsize: 128k`) - Optimizes for blockchain workload: compression saves 30-50% space, large recordsize suits sequential I/O patterns.
+
+    Note: `lz4` stands out for its balance between speed and compression ratio. LZ4 is particularly effective for large files and data streams, offering a good trade-off between compression speed and the compression ratio. 
 
 
 ```yaml
@@ -255,13 +257,13 @@ parameters:
   recordsize: "128k"        # Optimized for large sequential I/O
   shared: "no"              # Local storage, not shared
 
-# CRITICAL: Wait for pod scheduling before binding volume
+# CWait for pod scheduling before binding volume
 volumeBindingMode: WaitForFirstConsumer
 
 # Allow volume expansion (requires ZFS quota support)
 allowVolumeExpansion: true
 
-# CRITICAL: Retain volumes even if PVC deleted
+# Retain volumes even if PVC deleted
 reclaimPolicy: Retain
 
 # Topology: only nodes with ZFS pools in these zones
@@ -380,7 +382,7 @@ spec:
             memory: "64Gi"
             cpu: "8"
         
-        # CRITICAL: Startup probe for slow-starting archive nodes
+        #Startup probe for slow-starting archive nodes
         # Gives node up to 10 minutes to start before liveness probe begins
         startupProbe:
           httpGet:
@@ -466,7 +468,7 @@ A **Headless Service** that provides the stable DNS records for the `StatefulSet
 
 - **Requirement Fulfilled:** Service discovery for stateful pods.
     
-- **Key Configuration:** `clusterIP: None`. This is what makes it "headless." Instead of a single VIP, querying this service (`arbitrum-nodes.default.svc.cluster.local`) returns a list of all pod IPs.
+- **Key Configuration:** `clusterIP: None`. This is what makes it `headless`. Instead of a single VIP, querying this service (`arbitrum-nodes.default.svc.cluster.local`) returns a list of all pod IPs.
 
 ```yaml
 apiVersion: v1
@@ -608,7 +610,7 @@ spec:
       X-Real-IP: ""
       X-Forwarded-For: ""
 ```
-### 5. RPC Gateway (`Deployment` & `HPA`)
+### 5. RPC Gateway (`Deployment` & `Horizontal Pod Autoscaler (HPA)`)
 
 The stateless layer that handles authentication, rate limiting, caching, and routing.
 
@@ -862,7 +864,7 @@ spec:
     - podSelector:
         matchLabels:
           app: rpc-gateway
-    # ...ONL_Y on the RPC port
+    # ...only on the RPC port
     ports:
     - protocol: TCP
       port: 8545
@@ -1076,7 +1078,6 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 
 **Rationale:**
 
-- Task requirements focus on high availability within a region
 - Multi-region adds significant complexity (data replication, cross-region latency, DNS failover)
 - 99.95% SLA achievable with single-region, multi-AZ architecture
 - Can be extended to multi-region for disaster recovery in future phase
@@ -1144,7 +1145,7 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 
 **Reasoning:**
 
-- Industry standard for paid RPC: 99.9% (GetBlock, Chainstack)
+- Industry standard for paid RPC: 99.9% (GetBlock, Chainstack). Although, RPC providers like alchemy and drpc offers 99.995% and 99.99%.
 - 99.95% is above standard while remaining cost-effective
 - Achievable with single-region, multi-AZ deployment
 - Does not require multi-region active-active (2x infrastructure cost)
@@ -1311,7 +1312,7 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 **RPC Proxy (Stateless):**
 
 - Min replicas: 3 (maintain N+2 redundancy)
-- Max replicas: 100 (sufficient for 500k RPS burst at ~5k RPS per pod)
+- Max replicas: 100 (sufficient for 500k RPS spike at ~5k RPS per pod)
 - Metrics: CPU 70%, memory 80%, custom (request queue depth)
 - Scale-up: 30 seconds above threshold
 - Scale-down: 5 minutes below threshold (prevent flapping)
@@ -1349,7 +1350,7 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 
 **Key Parameters:**
 
-- `volumeBindingMode: WaitForFirstConsumer` - **CRITICAL** for local storage
+- `volumeBindingMode: WaitForFirstConsumer` - Critical for local storage
     - Delays PVC binding until pod is scheduled
     - Ensures pod and storage land on same node
     - Without this, scheduler might place pod on different node than storage
@@ -1556,11 +1557,6 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 - **Gain:** Operational simplicity, easier monitoring
 - **Loss:** Less precision in performance tracking
 
-**Tradeoff 4: Local Storage vs Network Storage**
-
-- **Choice:** ZFS LocalPV on node-local NVMe
-- **Gain:** Maximum I/O performance, lower latency
-- **Loss:** No replication, data lost if node dies (mitigated by N+2 redundancy and snapshots)
 
 ### 9.3. Rejected Approaches
 
@@ -1582,106 +1578,3 @@ Based on task note that we can "leverage platform-level kubernetes solutions," I
 - **Why rejected:** Network becomes bottleneck, adds latency, I/O performance degradation
 - **Decision:** Local storage with application-level redundancy
 
----
-
-## 10. Research & Validation
-
-### 10.1. Commercial Provider Analysis
-
-**Providers Researched:**
-
-- Alchemy
-- Infura
-- QuickNode
-- Chainstack
-- dRPC
-- GetBlock
-- Ankr
-
-**Key Findings:**
-
-- Standard SLA: 99.9% uptime
-- RPS per customer: 25-1,000 depending on tier
-- Enterprise providers: 100,000+ RPS aggregate capacity
-- Latency: 80-220ms average (varies by provider and region)
-- All implement query limits and tiered method access
-- Pricing: $50-$1,000/month for paid tiers, enterprise custom
-
-**Validation:** Our 100k RPS target and 99.95% SLA positions service competitively at enterprise tier.
-
-### 10.2. Arbitrum-Specific Research
-
-**Technical Details:**
-
-- Block time: ~0.25 seconds (250ms)
-- Finality:
-    - Soft finality: immediate (sequencer confirmation)
-    - L1 finality: ~15 minutes (Ethereum finality)
-- Data sources:
-    - Sequencer feed (WebSocket) - primary
-    - L1 batch data (from Ethereum) - fallback
-- Archive node requirements:
-    - Storage: 10TB+ (growing ~1TB/month)
-    - CPU: 8+ cores
-    - RAM: 64GB+
-    - IOPS: 10,000+ sustained
-
-**Implications for Design:**
-
-- Fast block times require aggressive sync monitoring (5-block threshold)
-- L1 dependency means nodes need reliable Ethereum RPC access
-- High storage growth requires capacity planning (quarterly review, 1TB/month model)
-
-### 10.3. Kubernetes Best Practices
-
-**Sources:**
-
-- Kubernetes official documentation
-- Production best practices from CNCF
-- Blockchain node operator communities
-
-**Applied Patterns:**
-
-- StatefulSet for stateful workloads (archive nodes)
-- Deployment for stateless workloads (gateway, proxy)
-- HPA for auto-scaling
-- PodDisruptionBudget for availability during maintenance
-- NetworkPolicy for zero-trust networking
-- Service Mesh for mTLS
-- Local storage with WaitForFirstConsumer binding
-- Startup probes for slow-starting containers
-
----
-
-## 11. Future Considerations (Out of Scope)
-
-These items were considered but deemed out of scope for initial production launch:
-
-### 11.1. Multi-Region Deployment
-
-- **When needed:** If 99.99% SLA required or customer base becomes global
-- **Requirements:** Active-active architecture, cross-region replication, GeoDNS
-
-### 11.2. Advanced Caching
-
-- **Potential:** CDN edge caching for read-heavy queries
-- **Benefit:** Reduced latency for geographically distributed users
-- **Complexity:** Cache invalidation, regional consistency
-
-### 11.3. Custom Arbitrum Optimizations
-
-- **Potential:** Arbitrum-specific query optimizations (batch requests, specialized indexes)
-- **Benefit:** Better performance for common query patterns
-- **Effort:** Requires deep Arbitrum expertise, custom development
-
-### 11.4. Cost Optimization
-
-- **Potential:** Spot instances for non-critical workloads, reserved capacity for predictable load
-- **Benefit:** 30-70% cost reduction
-- **Risk:** Spot instance interruptions, capacity planning complexity
-
-### 11.5. Advanced Observability
-
-- **Potential:** Custom business metrics (revenue per request, customer health scores)
-- **Benefit:** Better product insights, proactive customer success
-- **Effort:** Custom instrumentation, data pipeline
